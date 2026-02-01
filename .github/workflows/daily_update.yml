@@ -11,27 +11,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ustawienie Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Pobieranie danych i aktualizacja JSON
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          npm install -g @google/generative-ai-cli
+          # Instalacja oficjalnej biblioteki Google
+          npm install @google/generative-ai
           
           # Pobieranie stron
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/3x6/fra/graf.html > t3.txt
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/6x9/fra/graf.html > t6.txt
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/9x12/fra/graf.html > t9.txt
           
-          # Gemini bierze plik data.json oraz nowe dane i tworzy nową wersję JSONa
-          # Prosimy AI, aby dopisało nowe rekordy do istniejącej listy
-          cat data.json t3.txt t6.txt t9.txt | gemini "W pliku data.json masz historię kursów w formacie JSON (lista obiektów). Z pozostałych tekstów wyciągnij aktualne wartości Aktuální hodnota dla 3x6, 6x9 i 9x12. Dodaj nowy obiekt do listy z dzisiejszą datą i tymi wartościami. Zwróć TYLKO czysty kod JSON (całą zaktualizowaną listę)." > data.json.tmp
+          # Uruchomienie skryptu dopisującego do JSON
+          node -e "
+          const fs = require('fs');
+          const { GoogleGenerativeAI } = require('@google/generative-ai');
           
-          mv data.json.tmp data.json
+          async function run() {
+            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+            const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+            
+            const history = fs.readFileSync('data.json', 'utf8');
+            const t3 = fs.readFileSync('t3.txt', 'utf8');
+            const t6 = fs.readFileSync('t6.txt', 'utf8');
+            const t9 = fs.readFileSync('t9.txt', 'utf8');
+            
+            const prompt = \`Masz plik JSON z historią: \${history}. 
+            Z tych tekstów wyciągnij wartość 'Aktuální hodnota' dla 3x6, 6x9 i 9x12. 
+            Dodaj nowy wpis z datą \${new Date().toLocaleString()} i tymi wartościami. 
+            Zwróć TYLKO czysty, poprawny kod JSON (całą listę).\`;
+            
+            const result = await model.generateContent(prompt);
+            const text = result.response.text().replace(/\\\`\\\`\\\`json/g, '').replace(/\\\`\\\`\\\`/g, '').trim();
+            fs.writeFileSync('data.json', text);
+          }
+          run();
+          "
 
       - name: Zapisanie zmian
         run: |
           git config --global user.name "FRA-Bot"
           git config --global user.email "bot@github.com"
           git add data.json
-          git commit -m "Nowy wpis w historii: $(date)" || exit 0
+          git commit -m "Aktualizacja JSON: $(date)" || exit 0
           git push
