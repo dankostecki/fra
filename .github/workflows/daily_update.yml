@@ -1,40 +1,37 @@
-name: Pobieranie Kursów FRA
+name: Aktualizacja Historii FRA
 on:
   schedule:
-    # Uruchamia się o 8:00 i 15:00 czasu UTC (co odpowiada 9:00 i 16:00 w Polsce)
     - cron: '0 8 * * *'
     - cron: '0 15 * * *'
-  workflow_dispatch: # Pozwala Ci uruchomić to ręcznie przyciskiem "Run workflow"
+  workflow_dispatch:
 
 jobs:
-  update_rates:
+  update_history:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalacja Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Pobieranie danych i analiza Gemini
+      - name: Pobieranie danych i aktualizacja JSON
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           npm install -g @google/generative-ai-cli
           
-          # Pobieranie 3 stron udając przeglądarkę
+          # Pobieranie stron
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/3x6/fra/graf.html > t3.txt
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/6x9/fra/graf.html > t6.txt
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/9x12/fra/graf.html > t9.txt
           
-          # Gemini tworzy plik index.html na podstawie pobranych danych
-          cat t3.txt t6.txt t9.txt | gemini "Z dostarczonego kodu HTML wyciągnij wartości Aktuální hodnota dla trzech okresów: 3x6, 6x9 oraz 9x12. Stwórz z nich bardzo ładną, nowoczesną stronę HTML z tabelą. Użyj ciemnego motywu (dark mode), czcionki Sans-Serif i dodaj informację o dacie ostatniej aktualizacji: $(date). Odpoweidź TYLKO kodem HTML." > index.html
+          # Gemini bierze plik data.json oraz nowe dane i tworzy nową wersję JSONa
+          # Prosimy AI, aby dopisało nowe rekordy do istniejącej listy
+          cat data.json t3.txt t6.txt t9.txt | gemini "W pliku data.json masz historię kursów w formacie JSON (lista obiektów). Z pozostałych tekstów wyciągnij aktualne wartości Aktuální hodnota dla 3x6, 6x9 i 9x12. Dodaj nowy obiekt do listy z dzisiejszą datą i tymi wartościami. Zwróć TYLKO czysty kod JSON (całą zaktualizowaną listę)." > data.json.tmp
+          
+          mv data.json.tmp data.json
 
-      - name: Zapisanie zmian w repozytorium
+      - name: Zapisanie zmian
         run: |
           git config --global user.name "FRA-Bot"
           git config --global user.email "bot@github.com"
-          git add index.html
-          git commit -m "Aktualizacja kursów FRA: $(date)" || exit 0
+          git add data.json
+          git commit -m "Nowy wpis w historii: $(date)" || exit 0
           git push
