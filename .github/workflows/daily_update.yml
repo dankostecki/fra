@@ -1,9 +1,11 @@
 name: Aktualizacja Historii FRA
 on:
   schedule:
-    - cron: '0 8 * * *'
-    - cron: '0 15 * * *'
-  workflow_dispatch:
+    # 07:00 UTC = 08:00 lub 09:00 PL (zależnie od czasu letniego/zimowego)
+    # 14:00 UTC = 15:00 lub 16:00 PL
+    - cron: '0 7 * * *'
+    - cron: '0 14 * * *'
+  workflow_dispatch: # Przycisk do ręcznego uruchomienia
 
 jobs:
   update_history:
@@ -20,41 +22,64 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          # Instalacja oficjalnej biblioteki Google
+          # Instalacja biblioteki
           npm install @google/generative-ai
           
-          # Pobieranie stron
+          # Pobieranie stron (User-Agent udaje przeglądarkę)
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/3x6/fra/graf.html > t3.txt
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/6x9/fra/graf.html > t6.txt
           curl -s -L -A "Mozilla/5.0" https://www.patria.cz/kurzy/EUR/9x12/fra/graf.html > t9.txt
           
-          # Uruchomienie skryptu dopisującego do JSON
+          # Skrypt przetwarzający
           node -e "
           const fs = require('fs');
           const { GoogleGenerativeAI } = require('@google/generative-ai');
           
           async function run() {
-            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-            
-            const history = fs.readFileSync('data.json', 'utf8');
-            const t3 = fs.readFileSync('t3.txt', 'utf8');
-            const t6 = fs.readFileSync('t6.txt', 'utf8');
-            const t9 = fs.readFileSync('t9.txt', 'utf8');
-            
-            const prompt = \`Masz plik JSON z historią: \${history}. 
-            Z tych tekstów wyciągnij wartość 'Aktuální hodnota' dla 3x6, 6x9 i 9x12. 
-            Dodaj nowy wpis z datą \${new Date().toLocaleString()} i tymi wartościami. 
-            Zwróć TYLKO czysty, poprawny kod JSON (całą listę).\`;
-            
-            const result = await model.generateContent(prompt);
-            const text = result.response.text().replace(/\\\`\\\`\\\`json/g, '').replace(/\\\`\\\`\\\`/g, '').trim();
-            fs.writeFileSync('data.json', text);
+            try {
+              const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+              const model = genAI.getGenerativeModel({ 
+                model: 'gemini-1.5-flash',
+                generationConfig: { responseMimeType: 'application/json' }
+              });
+              
+              // Czytanie historii lub tworzenie nowej listy
+              let history = [];
+              if (fs.existsSync('data.json')) {
+                try {
+                  history = JSON.parse(fs.readFileSync('data.json', 'utf8'));
+                } catch(e) { history = []; }
+              }
+
+              const t3 = fs.readFileSync('t3.txt', 'utf8').substring(0, 5000);
+              const t6 = fs.readFileSync('t6.txt', 'utf8').substring(0, 5000);
+              const t9 = fs.readFileSync('t9.txt', 'utf8').substring(0, 5000);
+              
+              const prompt = \`Jesteś ekstraktorem danych. Wyciągnij wartość 'Aktuální hodnota' z trzech tekstów HTML:
+              3x6: \${t3}
+              6x9: \${t6}
+              9x12: \${t9}
+              
+              Zwróć JEDEN obiekt JSON z polami: 'date' (aktualna data i godzina), 'v3x6', 'v6x9', 'v9x12'.
+              Wartości muszą być liczbami.\`;
+              
+              const result = await model.generateContent(prompt);
+              const newData = JSON.parse(result.response.text());
+              
+              // Dodanie do historii i zapis
+              history.push(newData);
+              fs.writeFileSync('data.json', JSON.stringify(history, null, 2));
+              
+              console.log('Nowe dane dopisane:', newData);
+            } catch (err) {
+              console.error('BŁĄD:', err);
+              process.exit(1);
+            }
           }
           run();
           "
 
-      - name: Zapisanie zmian
+      - name: Zapisanie zmian w repozytorium
         run: |
           git config --global user.name "FRA-Bot"
           git config --global user.email "bot@github.com"
